@@ -3,6 +3,7 @@ import json
 import os
 import shutil
 import sys
+import argparse
 
 import numpy as np
 
@@ -22,8 +23,8 @@ NUM_SAMPLES = 100
 
 LEARNING_RATES = [1e-3, 1e-2, 5 * 1e-2, 1e-1]
 LOSSES = ['bpr', 'hinge', 'adaptive_hinge', 'pointwise']
-BATCH_SIZE = [8, 16, 32, 256]
-EMBEDDING_DIM = [8, 16, 32, 64, 128, 256]
+BATCH_SIZE = [8, 16, 32, 256][-1:]
+EMBEDDING_DIM = [8, 16, 32, 64, 128, 256][:1]
 N_ITER = list(range(5, 20))
 L2 = [1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 0.0]
 
@@ -160,7 +161,8 @@ def sample_pooling_hyperparameters(random_state, num):
         yield params
 
 
-def evaluate_cnn_model(hyperparameters, train, test, validation, random_state):
+def evaluate_cnn_model(hyperparameters, train, test, validation, random_state,
+                       tb_log_dir=None):
 
     h = hyperparameters
 
@@ -179,7 +181,8 @@ def evaluate_cnn_model(hyperparameters, train, test, validation, random_state):
                                   l2=h['l2'],
                                   n_iter=h['n_iter'],
                                   use_cuda=CUDA,
-                                  random_state=random_state)
+                                  random_state=random_state,
+                                  tb_log_dir=tb_log_dir)
 
     model.fit(train, verbose=True)
 
@@ -189,7 +192,8 @@ def evaluate_cnn_model(hyperparameters, train, test, validation, random_state):
     return test_mrr, val_mrr
 
 
-def evaluate_lstm_model(hyperparameters, train, test, validation, random_state):
+def evaluate_lstm_model(hyperparameters, train, test, validation, random_state,
+                        tb_log_dir=None):
 
     h = hyperparameters
 
@@ -200,7 +204,8 @@ def evaluate_lstm_model(hyperparameters, train, test, validation, random_state):
                                   l2=h['l2'],
                                   n_iter=h['n_iter'],
                                   use_cuda=CUDA,
-                                  random_state=random_state)
+                                  random_state=random_state,
+                                  tb_log_dir=tb_log_dir)
 
     model.fit(train, verbose=True)
 
@@ -210,7 +215,8 @@ def evaluate_lstm_model(hyperparameters, train, test, validation, random_state):
     return test_mrr, val_mrr
 
 
-def evaluate_pooling_model(hyperparameters, train, test, validation, random_state):
+def evaluate_pooling_model(hyperparameters, train, test, validation,
+                           random_state, tb_log_dir=None):
 
     h = hyperparameters
 
@@ -221,7 +227,8 @@ def evaluate_pooling_model(hyperparameters, train, test, validation, random_stat
                                   l2=h['l2'],
                                   n_iter=h['n_iter'],
                                   use_cuda=CUDA,
-                                  random_state=random_state)
+                                  random_state=random_state,
+                                  tb_log_dir=tb_log_dir)
 
     model.fit(train, verbose=True)
 
@@ -231,7 +238,7 @@ def evaluate_pooling_model(hyperparameters, train, test, validation, random_stat
     return test_mrr, val_mrr
 
 
-def run(train, test, validation, ranomd_state, model_type):
+def run(train, test, validation, ranomd_state, model_type, tb_log_dir=None):
 
     results = Results('{}_results.txt'.format(model_type))
 
@@ -252,18 +259,21 @@ def run(train, test, validation, ranomd_state, model_type):
     if best_result is not None:
         print('Best {} result: {}'.format(model_type, results.best()))
 
-    for hyperparameters in sample_fnc(random_state, NUM_SAMPLES):
+    for cnt, hyperparameters in enumerate(
+            sample_fnc(random_state, NUM_SAMPLES)):
 
         if hyperparameters in results:
             continue
 
         print('Evaluating {}'.format(hyperparameters))
 
+        this_tb_log_dir = os.path.join(tb_log_dir, model_type, "run_%3d" % cnt)
         (test_mrr, val_mrr) = eval_fnc(hyperparameters,
                                        train,
                                        test,
                                        validation,
-                                       random_state)
+                                       random_state,
+                                       tb_log_dir=this_tb_log_dir)
 
         print('Test MRR {} val MRR {}'.format(
             test_mrr.mean(), val_mrr.mean()
@@ -276,28 +286,39 @@ def run(train, test, validation, ranomd_state, model_type):
 
 if __name__ == '__main__':
 
-    max_sequence_length = 200
-    min_sequence_length = 20
-    step_size = 200
-    random_state = np.random.RandomState(100)
+    parser = argparse.ArgumentParser(
+        description='Sequence-based recommendations on Movielens 1M dataset')
+    parser.add_argument('--tb_log_dir', type=str, default=None,
+                        help='The log directory for tensorboard')
+    parser.add_argument('--mode', type=str, required=True,
+                        help="The mode, can be 'cnn', 'lstm', etc.")
+    parser.add_argument('--max_sequence_length', type=int, default=200,
+                        help='Max length of chunked sequences')
+    parser.add_argument('--min_sequence_length', type=int, default=20,
+                        help='Min length of chunked sequences')
+    parser.add_argument('--sequence_step_size', type=int, default=200,
+                        help='Size how much time steps to long back in sequence data')
+    parser.add_argument('--dataset_size', type=str, default='1M',
+                        help="Dataset size (can be '100K', '1M', '10M', or, '20M'")
+    parser.add_argument('--test_percentage', type=float, default=0.5,
+                    help='The proportion of users used for the testing set')
+    args = parser.parse_args()
 
-    dataset = get_movielens_dataset('1M')
+    dataset = get_movielens_dataset(args.dataset_size)
 
-    train, rest = user_based_train_test_split(dataset,
-                                              random_state=random_state)
+    random_state = np.random.RandomState(42)
+    train, rest = user_based_train_test_split(dataset, random_state=random_state)
     test, validation = user_based_train_test_split(rest,
-                                                   test_percentage=0.5,
+                                                   test_percentage=args.test_percentage,
                                                    random_state=random_state)
-    train = train.to_sequence(max_sequence_length=max_sequence_length,
-                              min_sequence_length=min_sequence_length,
-                              step_size=step_size)
-    test = test.to_sequence(max_sequence_length=max_sequence_length,
-                            min_sequence_length=min_sequence_length,
-                            step_size=step_size)
-    validation = validation.to_sequence(max_sequence_length=max_sequence_length,
-                                        min_sequence_length=min_sequence_length,
-                                        step_size=step_size)
+    train = train.to_sequence(max_sequence_length=args.max_sequence_length,
+                              min_sequence_length=args.min_sequence_length,
+                              step_size=args.sequence_step_size)
+    test = test.to_sequence(max_sequence_length=args.max_sequence_length,
+                            min_sequence_length=args.min_sequence_length,
+                            step_size=args.sequence_step_size)
+    validation = validation.to_sequence(max_sequence_length=args.max_sequence_length,
+                                        min_sequence_length=args.min_sequence_length,
+                                        step_size=args.sequence_step_size)
 
-    mode = sys.argv[1]
-
-    run(train, test, validation, random_state, mode)
+    run(train, test, validation, random_state, args.mode, tb_log_dir=args.tb_log_dir)

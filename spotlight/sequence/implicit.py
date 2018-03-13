@@ -11,6 +11,8 @@ import torch.optim as optim
 
 from torch.autograd import Variable
 
+from tensorboardX import SummaryWriter
+
 from spotlight.helpers import _repr_model
 from spotlight.losses import (adaptive_hinge_loss,
                               bpr_loss,
@@ -96,7 +98,9 @@ class ImplicitSequenceModel(object):
                  use_cuda=False,
                  sparse=False,
                  random_state=None,
-                 num_negative_samples=5):
+                 num_negative_samples=5,
+                 tb_log_dir=None,
+                 tb_comment=None):
 
         assert loss in ('pointwise',
                         'bpr',
@@ -121,6 +125,8 @@ class ImplicitSequenceModel(object):
         self._optimizer_func = optimizer_func
         self._random_state = random_state or np.random.RandomState()
         self._num_negative_samples = num_negative_samples
+        self._tb_log_dir = tb_log_dir
+        self._tb_comment = tb_comment
 
         self._num_items = None
         self._net = None
@@ -208,12 +214,24 @@ class ImplicitSequenceModel(object):
         """
 
         sequences = interactions.sequences.astype(np.int64)
-
+        n_sequences = len(sequences)
         if not self._initialized:
             self._initialize(interactions)
 
         self._check_input(sequences)
 
+        writer = None
+        if self._tb_log_dir is not None:
+            if verbose:
+                print("Tensorboard log directory: %s" % self._tb_log_dir)
+                print("To visualize training, open a terminal and run")
+                print("$ tensorboard --logdir=%s" % self._tb_log_dir)
+                comment = self._tb_comment
+                if comment is None:
+                    comment = 'implicit_sequence_model'
+            writer = SummaryWriter(log_dir=self._tb_log_dir, comment=comment)
+
+        wrote_graph = False
         for epoch_num in range(self._n_iter):
 
             sequences = shuffle(sequences,
@@ -224,17 +242,21 @@ class ImplicitSequenceModel(object):
 
             epoch_loss = 0.0
 
-            for minibatch_num, batch_sequence in enumerate(minibatch(sequences_tensor,
-                                                                     batch_size=self._batch_size)):
-
+            for minibatch_num, batch_indices in enumerate(minibatch(range(n_sequences),
+                                                                    batch_size=self._batch_size)):
+                batch_sequence = sequences_tensor[batch_indices]
                 sequence_var = Variable(batch_sequence)
+                n_iter = minibatch_num + epoch_num * self._batch_size
 
-                user_representation, _ = self._net.user_representation(
-                    sequence_var
-                )
+                (user_representation,
+                 final_user_representation) = self._net.user_representation(
+                    sequence_var)
 
                 positive_prediction = self._net(user_representation,
                                                 sequence_var)
+
+                if writer is not None and not wrote_graph:
+                    writer.add_graph(self._net, (user_representation, sequence_var))
 
                 if self._loss == 'adaptive_hinge':
                     negative_prediction = self._get_multiple_negative_predictions(
@@ -255,6 +277,17 @@ class ImplicitSequenceModel(object):
                 loss.backward()
 
                 self._optimizer.step()
+
+                if writer is not None and n_iter % 10 == 0:
+                    writer.add_scalar('loss', loss.data[0], n_iter)
+
+                    for name, param in self._net.named_parameters():
+                        writer.add_histogram(name, param.clone().cpu().data.numpy(), n_iter)
+
+                    writer.add_embedding(
+                        final_user_representation.data,
+                        metadata=interactions.user_ids[batch_indices],
+                        global_step=n_iter)
 
             epoch_loss /= minibatch_num + 1
 
