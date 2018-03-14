@@ -21,12 +21,12 @@ CUDA = (os.environ.get('CUDA') is not None or
 
 NUM_SAMPLES = 100
 
-LEARNING_RATES = [1e-3, 1e-2, 5 * 1e-2, 1e-1]
-LOSSES = ['bpr', 'hinge', 'adaptive_hinge', 'pointwise']
-BATCH_SIZE = [8, 16, 32, 256][-1:]
-EMBEDDING_DIM = [8, 16, 32, 64, 128, 256][:1]
-N_ITER = list(range(5, 20))
-L2 = [1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 0.0]
+LEARNING_RATES = [1e-3, 1e-2, 5 * 1e-2, 1e-1][:1]
+LOSSES = ['bpr', 'hinge', 'adaptive_hinge', 'pointwise'][:1]
+BATCH_SIZE = [8, 16, 32, 256][-2:-1]
+EMBEDDING_DIM = [8, 16, 32, 64, 128, 256][-4:-3]
+N_ITER = list(range(5, 20))[:1]
+L2 = [1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 0.0][2:3]
 
 
 class Results:
@@ -267,7 +267,7 @@ def run(train, test, validation, ranomd_state, model_type, tb_log_dir=None):
 
         print('Evaluating {}'.format(hyperparameters))
 
-        this_tb_log_dir = os.path.join(tb_log_dir, model_type, "run_%3d" % cnt)
+        this_tb_log_dir = os.path.join(tb_log_dir, model_type, "run_%03d" % cnt)
         (test_mrr, val_mrr) = eval_fnc(hyperparameters,
                                        train,
                                        test,
